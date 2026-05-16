@@ -129,7 +129,7 @@ jobs:
 
       - name: Set Image Name to Lowercase
         run: |
-          echo "IMAGE_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_ENV
+          echo "IMAGE_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]' | sed 's/-$//')" >> $GITHUB_ENV
 
       - name: Build & Push Backend
         uses: docker/build-push-action@v5
