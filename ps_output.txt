@@ -1,0 +1,9 @@
+NAME                     IMAGE                       COMMAND                  SERVICE         CREATED        STATUS                      PORTS
+devops-ai-service-1      devops-ai-service           "gunicorn --bind 0.0???"   ai-service      11 hours ago   Up 24 minutes (healthy)     0.0.0.0:8000->8000/tcp
+devops-backend-1         devops-backend              "docker-entrypoint.s???"   backend         11 hours ago   Up 24 minutes (healthy)     0.0.0.0:5000->5000/tcp
+devops-frontend-1        devops-frontend             "/docker-entrypoint.???"   frontend        11 hours ago   Up 28 minutes (unhealthy)   0.0.0.0:3000->80/tcp
+devops-grafana-1         grafana/grafana:latest      "/run.sh"                grafana         2 days ago     Up 24 minutes               0.0.0.0:3001->3000/tcp
+devops-mongo-1           mongo:7                     "docker-entrypoint.s???"   mongo           2 days ago     Up 24 minutes               0.0.0.0:27017->27017/tcp
+devops-nginx-1           nginx:alpine                "/docker-entrypoint.???"   nginx           2 days ago     Up 20 minutes               0.0.0.0:80->80/tcp, 0.0.0.0:443->443/tcp
+devops-node-exporter-1   prom/node-exporter:latest   "/bin/node_exporter ???"   node-exporter   14 hours ago   Up 24 minutes               0.0.0.0:9100->9100/tcp
+devops-prometheus-1      prom/prometheus:latest      "/bin/prometheus --c???"   prometheus      2 days ago     Up 24 minutes               0.0.0.0:9090->9090/tcp

@@ -142,23 +142,6 @@ def detect_traffic_anomaly():
         return jsonify({'success': False, 'message': str(e)}), 500
 
 
-@app.route('/api/simulate', methods=['GET'])
-def simulate_anomalies():
-    """
-    Generate simulated anomaly data for dashboard demonstration
-    """
-    try:
-        simulated = detector.generate_simulated_data()
-        
-        return jsonify({
-            'success': True,
-            'data': simulated
-        })
-
-    except Exception as e:
-        logger.error(f"Simulation error: {str(e)}")
-        return jsonify({'success': False, 'message': str(e)}), 500
-
 
 if __name__ == '__main__':
     logger.info("🤖 Starting AI Anomaly Detection Service...")

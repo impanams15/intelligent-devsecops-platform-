@@ -10,12 +10,34 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const dotenv = require('dotenv');
 const connectDB = require('./config/db');
+const si = require('systeminformation');
+const os = require('os');
+const ServerMetric = require('./models/ServerMetric');
+const Deployment = require('./models/Deployment'); // To create some starting real data
+const SecurityScan = require('./models/SecurityScan');
+
+const http = require('http');
+const { Server } = require('socket.io');
+const MonitorService = require('./services/monitorService');
 
 // Load environment variables
 dotenv.config();
 
 // Initialize Express app
 const app = express();
+const server = http.createServer(app);
+
+// Initialize Socket.io
+const io = new Server(server, {
+    cors: {
+        origin: process.env.FRONTEND_URL || 'http://localhost:3000',
+        methods: ['GET', 'POST']
+    }
+});
+
+// Initialize Monitor Service
+const monitor = new MonitorService(io);
+app.set('monitor', monitor);
 
 // ─── Connect to Database ─────────────────────────
 connectDB();
@@ -32,8 +54,21 @@ const limiter = rateLimit({
 app.use('/api/', limiter);
 
 // ─── General Middleware ──────────────────────────
+const allowedOrigins = [
+    'http://localhost:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:5173'
+];
+
 app.use(cors({
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+    origin: (origin, callback) => {
+        if (!origin || allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -63,29 +98,14 @@ app.get('/api/health', (req, res) => {
 });
 
 // ─── Prometheus Metrics Endpoint ─────────────────
-app.get('/metrics', (req, res) => {
-    res.set('Content-Type', 'text/plain');
-    res.send(`
-# HELP http_requests_total Total number of HTTP requests
-# TYPE http_requests_total counter
-http_requests_total{method="GET",status="200"} ${Math.floor(Math.random() * 10000)}
-http_requests_total{method="POST",status="200"} ${Math.floor(Math.random() * 5000)}
-http_requests_total{method="POST",status="401"} ${Math.floor(Math.random() * 100)}
-
-# HELP http_request_duration_seconds HTTP request duration in seconds
-# TYPE http_request_duration_seconds histogram
-http_request_duration_seconds_bucket{le="0.1"} ${Math.floor(Math.random() * 8000)}
-http_request_duration_seconds_bucket{le="0.5"} ${Math.floor(Math.random() * 9000)}
-http_request_duration_seconds_bucket{le="1.0"} ${Math.floor(Math.random() * 9500)}
-
-# HELP nodejs_heap_size_total_bytes Process heap size from Node.js
-# TYPE nodejs_heap_size_total_bytes gauge
-nodejs_heap_size_total_bytes ${process.memoryUsage().heapTotal}
-
-# HELP nodejs_heap_size_used_bytes Process heap size used from Node.js
-# TYPE nodejs_heap_size_used_bytes gauge
-nodejs_heap_size_used_bytes ${process.memoryUsage().heapUsed}
-  `.trim());
+app.get('/metrics', async (req, res) => {
+    try {
+        const monitor = app.get('monitor');
+        res.set('Content-Type', monitor.getRegistry().contentType);
+        res.end(await monitor.getRegistry().metrics());
+    } catch (err) {
+        res.status(500).end(err);
+    }
 });
 
 // ─── 404 Handler ─────────────────────────────────
@@ -108,12 +128,12 @@ app.use((err, req, res, next) => {
 
 // ─── Start Server ────────────────────────────────
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
+server.listen(PORT, () => {
     console.log(`
 ╔══════════════════════════════════════════════════╗
-║     🚀 DevSecOps API Server                     ║
+║     🚀 DevSecOps API Server (REAL-TIME)         ║
 ║     Running on port: ${PORT}                        ║
-║     Environment: ${process.env.NODE_ENV || 'development'}                 ║
+║     WebSockets: Active                           ║
 ║     Health: http://localhost:${PORT}/api/health      ║
 ╚══════════════════════════════════════════════════╝
   `);

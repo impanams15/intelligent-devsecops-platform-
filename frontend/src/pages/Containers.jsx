@@ -1,23 +1,46 @@
-// Container Status Page
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { HiOutlineChip, HiOutlinePlay, HiOutlineStop } from 'react-icons/hi';
+import { HiOutlineChip } from 'react-icons/hi';
+import { metricsAPI } from '../services/api';
+import { io } from 'socket.io-client';
 
-const containers = [
-    { id: 'c1a2b3', name: 'frontend-app', image: 'devsecops/frontend:latest', status: 'running', cpu: '2.3%', memory: '128MB / 512MB', ports: '3000:3000', uptime: '3d 14h', health: 'healthy' },
-    { id: 'd4e5f6', name: 'backend-api', image: 'devsecops/backend:latest', status: 'running', cpu: '5.1%', memory: '256MB / 1GB', ports: '5000:5000', uptime: '3d 14h', health: 'healthy' },
-    { id: 'g7h8i9', name: 'mongodb', image: 'mongo:7', status: 'running', cpu: '3.8%', memory: '512MB / 2GB', ports: '27017:27017', uptime: '5d 2h', health: 'healthy' },
-    { id: 'j1k2l3', name: 'redis-cache', image: 'redis:7-alpine', status: 'running', cpu: '0.5%', memory: '64MB / 256MB', ports: '6379:6379', uptime: '5d 2h', health: 'healthy' },
-    { id: 'm4n5o6', name: 'nginx-proxy', image: 'nginx:alpine', status: 'running', cpu: '0.2%', memory: '32MB / 128MB', ports: '80:80, 443:443', uptime: '5d 2h', health: 'healthy' },
-    { id: 'p7q8r9', name: 'prometheus', image: 'prom/prometheus:latest', status: 'running', cpu: '1.2%', memory: '256MB / 512MB', ports: '9090:9090', uptime: '3d 14h', health: 'healthy' },
-    { id: 's1t2u3', name: 'grafana', image: 'grafana/grafana:latest', status: 'running', cpu: '0.8%', memory: '128MB / 512MB', ports: '3001:3000', uptime: '3d 14h', health: 'healthy' },
-    { id: 'v4w5x6', name: 'ai-service', image: 'devsecops/ai:latest', status: 'running', cpu: '8.5%', memory: '512MB / 2GB', ports: '8000:8000', uptime: '2d 6h', health: 'healthy' },
-    { id: 'y7z8a9', name: 'sonarqube', image: 'sonarqube:lts', status: 'stopped', cpu: '0%', memory: '0MB / 4GB', ports: '-', uptime: '-', health: 'stopped' },
-];
-
-const running = containers.filter(c => c.status === 'running').length;
-const stopped = containers.filter(c => c.status === 'stopped').length;
+const socket = io('http://localhost:5000');
 
 export default function Containers() {
+    const [containers, setContainers] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    const fetchData = async () => {
+        try {
+            const res = await metricsAPI.getContainers();
+            if (res.data.success) {
+                setContainers(res.data.data);
+            }
+        } catch (err) {
+            console.error("Containers fetch error:", err);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchData();
+
+        socket.on('metrics_update', () => {
+            // Re-fetch detailed container stats when system metrics update
+            fetchData();
+        });
+
+        return () => {
+            socket.off('metrics_update');
+        };
+    }, []);
+
+    const running = containers.filter(c => c.status === 'running' || c.status === 'Up').length;
+    const stopped = containers.filter(c => c.status !== 'running' && c.status !== 'Up').length;
+
+    if (loading && containers.length === 0) return <div className="spinner-container"><div className="spinner"></div></div>;
+
     return (
         <div>
             <motion.div initial={{ opacity: 0, y: -20 }} animate={{ opacity: 1, y: 0 }}>
@@ -52,7 +75,7 @@ export default function Containers() {
                         </thead>
                         <tbody>
                             {containers.map((c, i) => (
-                                <motion.tr key={c.id} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 + i * 0.05 }}>
+                                <motion.tr key={c.id || i} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.3 + i * 0.05 }}>
                                     <td>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                             <HiOutlineChip size={16} color={c.status === 'running' ? '#10b981' : '#ef4444'} />

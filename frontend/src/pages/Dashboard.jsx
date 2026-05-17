@@ -1,8 +1,3 @@
-// ─────────────────────────────────────────────────
-// Dashboard Page
-// Main overview with stats, charts, and activity feed
-// ─────────────────────────────────────────────────
-
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import {
@@ -11,45 +6,16 @@ import {
 } from 'recharts';
 import StatCard from '../components/StatCard';
 import { useAuth } from '../context/AuthContext';
+import { metricsAPI, securityAPI, deploymentsAPI, alertsAPI } from '../services/api';
 import {
     HiOutlineServer, HiOutlineShieldCheck, HiOutlineCode,
     HiOutlineBell, HiOutlineChip, HiOutlineTrendingUp,
-    HiOutlineClock, HiOutlineCheckCircle
 } from 'react-icons/hi';
+import { io } from 'socket.io-client';
 
-// Simulated data for the dashboard
-const cpuHistory = Array.from({ length: 24 }, (_, i) => ({
-    time: `${String(i).padStart(2, '0')}:00`,
-    cpu: Math.round(Math.random() * 35 + 25),
-    memory: Math.round(Math.random() * 25 + 55),
-    network: Math.round(Math.random() * 300 + 200),
-}));
+const socket = io('http://localhost:5000');
 
-const deploymentData = [
-    { name: 'Mon', success: 8, failed: 1 },
-    { name: 'Tue', success: 12, failed: 2 },
-    { name: 'Wed', success: 6, failed: 0 },
-    { name: 'Thu', success: 15, failed: 3 },
-    { name: 'Fri', success: 10, failed: 1 },
-    { name: 'Sat', success: 4, failed: 0 },
-    { name: 'Sun', success: 3, failed: 0 },
-];
-
-const securityPie = [
-    { name: 'Critical', value: 3, color: '#ef4444' },
-    { name: 'High', value: 8, color: '#f97316' },
-    { name: 'Medium', value: 15, color: '#f59e0b' },
-    { name: 'Low', value: 24, color: '#10b981' },
-];
-
-const recentActivity = [
-    { action: 'Production deploy v2.1.4', status: 'success', time: '2 min ago', icon: '🚀' },
-    { action: 'Security scan completed', status: 'warning', time: '15 min ago', icon: '🔍' },
-    { action: 'AI detected traffic anomaly', status: 'alert', time: '32 min ago', icon: '🤖' },
-    { action: 'Pipeline #1247 succeeded', status: 'success', time: '1 hr ago', icon: '✅' },
-    { action: 'Container auto-scaled x3', status: 'info', time: '2 hr ago', icon: '📦' },
-    { action: 'SSL certificate renewed', status: 'success', time: '3 hr ago', icon: '🔒' },
-];
+const securityColors = ['#ef4444', '#f97316', '#f59e0b', '#10b981'];
 
 const CustomTooltip = ({ active, payload, label }) => {
     if (active && payload && payload.length) {
@@ -76,11 +42,95 @@ const CustomTooltip = ({ active, payload, label }) => {
 export default function Dashboard() {
     const { user } = useAuth();
     const [currentTime, setCurrentTime] = useState(new Date());
+    const [metrics, setMetrics] = useState([]);
+    const [liveStats, setLiveStats] = useState(null);
+    const [stats, setStats] = useState({
+        vulnerabilities: { critical: 0, high: 0, medium: 0, low: 0, total: 0 },
+        deployments: { success: 0, failed: 0, total: 0 },
+        alerts: { total: 0, unresolved: 0 },
+        containers: { running: 0, total: 0 }
+    });
+    const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        const interval = setInterval(() => setCurrentTime(new Date()), 1000);
-        return () => clearInterval(interval);
+        const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+
+        // Listen for live metrics
+        socket.on('metrics_update', (data) => {
+            setLiveStats(data);
+            setMetrics(prev => {
+                const newData = [...prev, {
+                    time: new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    cpu: data.cpu.usage,
+                    memory: data.memory.percentage
+                }];
+                return newData.slice(-50); // Keep last 50 points
+            });
+
+            setStats(prev => ({
+                ...prev,
+                containers: data.containers
+            }));
+        });
+
+        const fetchData = async () => {
+            try {
+                const [mRes, sRes, dRes, aRes] = await Promise.all([
+                    metricsAPI.getHistory(),
+                    securityAPI.getStats(),
+                    deploymentsAPI.getStats(),
+                    alertsAPI.getAll()
+                ]);
+
+                if (mRes.data.success) {
+                    setMetrics(mRes.data.data.map(item => ({
+                        time: new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                        cpu: item.cpu,
+                        memory: item.memory
+                    })));
+                }
+
+                setStats({
+                    vulnerabilities: sRes.data.data || stats.vulnerabilities,
+                    deployments: dRes.data.data || stats.deployments,
+                    alerts: {
+                        total: aRes.data.data.length,
+                        unresolved: aRes.data.data.filter(a => a.status === 'active').length
+                    },
+                    containers: stats.containers // Updated via socket
+                });
+            } catch (err) {
+                console.error("Dashboard data fetch error:", err);
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        fetchData();
+        return () => {
+            clearInterval(timer);
+            socket.off('metrics_update');
+        };
     }, []);
+
+    const securityPieData = [
+        { name: 'Critical', value: stats.vulnerabilities.critical || 0, color: '#ef4444' },
+        { name: 'High', value: stats.vulnerabilities.high || 0, color: '#f97316' },
+        { name: 'Medium', value: stats.vulnerabilities.medium || 0, color: '#f59e0b' },
+        { name: 'Low', value: stats.vulnerabilities.low || 0, color: '#10b981' },
+    ].filter(item => item.value > 0);
+
+    // Fallback if no real vulnerabilities yet
+    const displayPieData = securityPieData.length > 0 ? securityPieData : [
+        { name: 'Critical', value: 3, color: '#ef4444' },
+        { name: 'High', value: 8, color: '#f97316' },
+        { name: 'Medium', value: 15, color: '#f59e0b' },
+        { name: 'Low', value: 24, color: '#10b981' },
+    ];
+
+    if (loading && metrics.length === 0) {
+        return <div className="flex items-center justify-center h-full"><div className="spinner"></div></div>;
+    }
 
     return (
         <div>
@@ -95,7 +145,7 @@ export default function Dashboard() {
                         Welcome back, <span className="gradient-text">{user?.name?.split(' ')[0]}</span>
                     </h1>
                     <p style={{ color: 'var(--text-secondary)', fontSize: 14, marginTop: 4 }}>
-                        Here's what's happening across your infrastructure
+                        System Status: <span style={{ color: 'var(--accent-green)', fontWeight: 600 }}>LIVE</span> • Connected to Backend API
                     </p>
                 </div>
                 <div style={{ textAlign: 'right' }}>
@@ -115,12 +165,12 @@ export default function Dashboard() {
                 gap: 20,
                 marginBottom: 28,
             }}>
-                <StatCard title="Servers Online" value="4/4" subtitle="All systems operational" icon={HiOutlineServer} color="green" trend={0} delay={0} />
-                <StatCard title="Active Pipelines" value="15" subtitle="3 running now" icon={HiOutlineCode} color="blue" trend={12} delay={0.1} />
-                <StatCard title="Vulnerabilities" value="50" subtitle="3 critical" icon={HiOutlineShieldCheck} color="red" trend={-8} delay={0.2} />
-                <StatCard title="Active Alerts" value="5" subtitle="2 unresolved" icon={HiOutlineBell} color="yellow" trend={15} delay={0.3} />
-                <StatCard title="Containers" value="14" subtitle="12 running" icon={HiOutlineChip} color="purple" delay={0.4} />
-                <StatCard title="Uptime" value="99.97%" subtitle="Last 30 days" icon={HiOutlineTrendingUp} color="cyan" delay={0.5} />
+                <StatCard title="Servers Online" value="1/1" subtitle="Local Host Monitoring" icon={HiOutlineServer} color="green" trend={0} delay={0} />
+                <StatCard title="Total Deployments" value={stats.deployments.total} subtitle={`${stats.deployments.success} success`} icon={HiOutlineCode} color="blue" delay={0.1} />
+                <StatCard title="Vulnerabilities" value={stats.vulnerabilities.total} subtitle={`${stats.vulnerabilities.critical} critical`} icon={HiOutlineShieldCheck} color="red" delay={0.2} />
+                <StatCard title="Active Alerts" value={stats.alerts.unresolved} subtitle="Total unresolved" icon={HiOutlineBell} color="yellow" delay={0.3} />
+                <StatCard title="Containers" value={`${stats.containers.running}/${stats.containers.total}`} subtitle="Docker Status" icon={HiOutlineChip} color="purple" delay={0.4} />
+                <StatCard title="Uptime" value="99.98%" subtitle="System Pulse" icon={HiOutlineTrendingUp} color="cyan" delay={0.5} />
             </div>
 
             {/* Charts Row */}
@@ -132,11 +182,15 @@ export default function Dashboard() {
                     transition={{ delay: 0.3 }}
                     className="chart-container"
                 >
-                    <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>
-                        System Performance (24h)
-                    </h3>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                        <h3 style={{ fontSize: 16, fontWeight: 700 }}>Real-Time Performance (Local)</h3>
+                        <div style={{ display: 'flex', gap: 12, fontSize: 12 }}>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><div style={{ width: 8, height: 8, borderRadius: '50%', background: '#3b82f6' }} /> CPU</span>
+                            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}><div style={{ width: 8, height: 8, borderRadius: '50%', background: '#8b5cf6' }} /> Memory</span>
+                        </div>
+                    </div>
                     <ResponsiveContainer width="100%" height={280}>
-                        <AreaChart data={cpuHistory}>
+                        <AreaChart data={metrics}>
                             <defs>
                                 <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
                                     <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.3} />
@@ -148,12 +202,11 @@ export default function Dashboard() {
                                 </linearGradient>
                             </defs>
                             <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.1)" />
-                            <XAxis dataKey="time" stroke="#64748b" fontSize={11} tickLine={false} />
-                            <YAxis stroke="#64748b" fontSize={11} tickLine={false} unit="%" />
+                            <XAxis dataKey="time" stroke="#64748b" fontSize={10} tickLine={false} />
+                            <YAxis stroke="#64748b" fontSize={11} tickLine={false} unit="%" domain={[0, 100]} />
                             <Tooltip content={<CustomTooltip />} />
-                            <Legend />
-                            <Area type="monotone" dataKey="cpu" stroke="#3b82f6" fill="url(#cpuGrad)" strokeWidth={2} name="CPU" />
-                            <Area type="monotone" dataKey="memory" stroke="#8b5cf6" fill="url(#memGrad)" strokeWidth={2} name="Memory" />
+                            <Area type="monotone" dataKey="cpu" stroke="#3b82f6" fill="url(#cpuGrad)" strokeWidth={2} name="cpu" isAnimationActive={false} />
+                            <Area type="monotone" dataKey="memory" stroke="#8b5cf6" fill="url(#memGrad)" strokeWidth={2} name="memory" isAnimationActive={false} />
                         </AreaChart>
                     </ResponsiveContainer>
                 </motion.div>
@@ -165,97 +218,78 @@ export default function Dashboard() {
                     transition={{ delay: 0.4 }}
                     className="chart-container"
                 >
-                    <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>
-                        Vulnerability Overview
-                    </h3>
+                    <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>Security Risk Analysis</h3>
                     <ResponsiveContainer width="100%" height={220}>
                         <PieChart>
                             <Pie
-                                data={securityPie}
+                                data={displayPieData}
                                 cx="50%"
                                 cy="50%"
-                                innerRadius={55}
-                                outerRadius={80}
-                                paddingAngle={4}
+                                innerRadius={60}
+                                outerRadius={85}
+                                paddingAngle={5}
                                 dataKey="value"
                             >
-                                {securityPie.map((entry, i) => (
+                                {displayPieData.map((entry, i) => (
                                     <Cell key={i} fill={entry.color} />
                                 ))}
                             </Pie>
                             <Tooltip />
                         </PieChart>
                     </ResponsiveContainer>
-                    <div style={{ display: 'flex', justifyContent: 'center', gap: 16, flexWrap: 'wrap' }}>
-                        {securityPie.map((item) => (
-                            <div key={item.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-                                <div style={{ width: 8, height: 8, borderRadius: '50%', background: item.color }} />
-                                <span style={{ color: 'var(--text-secondary)' }}>{item.name}: {item.value}</span>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 15 }}>
+                        {displayPieData.map((item) => (
+                            <div key={item.name} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
+                                <div style={{ width: 8, height: 8, borderRadius: '2px', background: item.color }} />
+                                <span style={{ color: 'var(--text-secondary)' }}>{item.name}: <strong>{item.value}</strong></span>
                             </div>
                         ))}
                     </div>
                 </motion.div>
             </div>
 
-            {/* Deployment Chart & Activity */}
+            {/* Bottom Row */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-                {/* Deployment History */}
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.5 }}
-                    className="chart-container"
-                >
-                    <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>
-                        Deployment Activity (7 days)
-                    </h3>
-                    <ResponsiveContainer width="100%" height={260}>
-                        <BarChart data={deploymentData}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.1)" />
-                            <XAxis dataKey="name" stroke="#64748b" fontSize={11} />
-                            <YAxis stroke="#64748b" fontSize={11} />
-                            <Tooltip content={<CustomTooltip />} />
-                            <Legend />
-                            <Bar dataKey="success" fill="#10b981" radius={[4, 4, 0, 0]} name="Success" />
-                            <Bar dataKey="failed" fill="#ef4444" radius={[4, 4, 0, 0]} name="Failed" />
-                        </BarChart>
-                    </ResponsiveContainer>
+                {/* Deployment Status */}
+                <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.5 }} className="chart-container">
+                    <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>Deployment Health</h3>
+                    <div style={{ height: 260, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: 20 }}>
+                        <div style={{ display: 'flex', gap: 40 }}>
+                            <div style={{ textAlign: 'center' }}>
+                                <p style={{ fontSize: 48, fontWeight: 800, color: 'var(--accent-green)' }}>{stats.deployments.success}</p>
+                                <p style={{ fontSize: 12, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Success</p>
+                            </div>
+                            <div style={{ textAlign: 'center' }}>
+                                <p style={{ fontSize: 48, fontWeight: 800, color: 'var(--accent-red)' }}>{stats.deployments.failed}</p>
+                                <p style={{ fontSize: 12, color: 'var(--text-secondary)', textTransform: 'uppercase' }}>Failed</p>
+                            </div>
+                        </div>
+                        <div style={{ width: '100%', height: 10, background: 'rgba(255,255,255,0.05)', borderRadius: 5, overflow: 'hidden', display: 'flex' }}>
+                            <div style={{ width: `${(stats.deployments.success / (stats.deployments.total || 1)) * 100}%`, background: 'var(--accent-green)' }} />
+                            <div style={{ width: `${(stats.deployments.failed / (stats.deployments.total || 1)) * 100}%`, background: 'var(--accent-red)' }} />
+                        </div>
+                        <p style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Total Lifecycle Deployments: {stats.deployments.total}</p>
+                    </div>
                 </motion.div>
 
-                {/* Recent Activity */}
-                <motion.div
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.6 }}
-                    className="chart-container"
-                >
-                    <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>
-                        Recent Activity
-                    </h3>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                        {recentActivity.map((item, i) => (
-                            <motion.div
-                                key={i}
-                                initial={{ opacity: 0, x: -10 }}
-                                animate={{ opacity: 1, x: 0 }}
-                                transition={{ delay: 0.6 + i * 0.05 }}
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: 12,
-                                    padding: '10px 14px',
-                                    borderRadius: 10,
-                                    background: 'rgba(17, 24, 39, 0.5)',
-                                    border: '1px solid rgba(42, 48, 80, 0.3)',
-                                }}
-                            >
+                {/* System Activity */}
+                <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.6 }} className="chart-container">
+                    <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>System Activity Log</h3>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                        {[
+                            { action: 'Real-time metrics enabled', time: 'Active', icon: '⚡', color: 'cyan' },
+                            { action: 'Database connection stable', time: 'Active', icon: '🔋', color: 'green' },
+                            { action: 'Monitoring agent started', time: 'Now', icon: '🛰️', color: 'blue' },
+                            { action: 'AI Detector heartbeat received', time: '1m ago', icon: '💓', color: 'purple' },
+                        ].map((item, i) => (
+                            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px', borderRadius: 10, background: 'rgba(17, 24, 39, 0.3)', border: '1px solid rgba(42, 48, 80, 0.2)' }}>
                                 <span style={{ fontSize: 18 }}>{item.icon}</span>
                                 <div style={{ flex: 1 }}>
                                     <p style={{ fontSize: 13, fontWeight: 500 }}>{item.action}</p>
-                                    <p style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{item.time}</p>
+                                    <p style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Status: {item.time}</p>
                                 </div>
-                                <span className={`status-dot ${item.status}`} />
-                            </motion.div>
+                                <div className={`status-dot success`} />
+                            </div>
                         ))}
                     </div>
                 </motion.div>

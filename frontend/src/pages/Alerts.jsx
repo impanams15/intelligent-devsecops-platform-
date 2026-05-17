@@ -1,35 +1,63 @@
-// Alerts / Notification Page
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { HiOutlineBell, HiOutlineCheck, HiOutlineX } from 'react-icons/hi';
+import { HiOutlineBell, HiOutlineCheck, HiOutlineCheckCircle } from 'react-icons/hi';
+import { alertsAPI } from '../services/api';
+import { io } from 'socket.io-client';
+import toast from 'react-hot-toast';
 
-const alertsData = [
-    { id: 1, title: 'Critical Vulnerability Detected', message: 'CVE-2024-1234 found in production container image devsecops/backend:latest', type: 'security', severity: 'critical', source: 'Trivy Scanner', channel: 'slack', status: 'active', time: '2 min ago' },
-    { id: 2, title: 'High CPU Usage Alert', message: 'Server prod-db-01 CPU usage exceeded 90% for 5 consecutive minutes', type: 'performance', severity: 'high', source: 'Prometheus', channel: 'email', status: 'active', time: '15 min ago' },
-    { id: 3, title: 'Anomaly: Unusual Login Pattern', message: 'AI detected 47 failed login attempts from IP 192.168.1.100', type: 'ai_detection', severity: 'critical', source: 'AI Service', channel: 'telegram', status: 'active', time: '32 min ago' },
-    { id: 4, title: 'Deployment Failed', message: 'Production deployment v1.2.3 failed at build stage due to test failures', type: 'deployment', severity: 'high', source: 'GitHub Actions', channel: 'slack', status: 'acknowledged', time: '1 hr ago' },
-    { id: 5, title: 'Container Restart Loop', message: 'Container auth-service has restarted 5 times in the last hour', type: 'system', severity: 'high', source: 'Kubernetes', channel: 'dashboard', status: 'acknowledged', time: '2 hr ago' },
-    { id: 6, title: 'SSL Certificate Expiring', message: 'SSL certificate for api.devsecops.io expires in 7 days', type: 'security', severity: 'medium', source: 'Cert Monitor', channel: 'email', status: 'resolved', time: '5 hr ago' },
-    { id: 7, title: 'Disk Space Warning', message: 'Server prod-api-01 disk usage at 85% — consider cleanup', type: 'system', severity: 'medium', source: 'Prometheus', channel: 'dashboard', status: 'resolved', time: '8 hr ago' },
-    { id: 8, title: 'Successful Production Deploy', message: 'v1.3.0 deployed to production env successfully', type: 'deployment', severity: 'info', source: 'CI/CD', channel: 'slack', status: 'resolved', time: '12 hr ago' },
-];
+const socket = io('http://localhost:5000');
 
 const channelIcons = { slack: '💬', email: '📧', telegram: '📱', dashboard: '🖥️', all: '📡' };
 const typeColors = { security: '#ef4444', performance: '#f97316', deployment: '#3b82f6', system: '#8b5cf6', ai_detection: '#06b6d4' };
 
 export default function Alerts() {
     const [filter, setFilter] = useState('all');
-    const [alerts, setAlerts] = useState(alertsData);
+    const [alerts, setAlerts] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    const fetchData = async () => {
+        try {
+            const res = await alertsAPI.getAll();
+            if (res.data.success) {
+                setAlerts(res.data.data);
+            }
+        } catch (err) {
+            console.error("Alerts fetch error:", err);
+            toast.error("Failed to load real-time alerts stream.");
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        fetchData();
+
+        socket.on('alert_new', (newAlert) => {
+            setAlerts(prev => [newAlert, ...prev].slice(0, 50));
+        });
+
+        return () => {
+            socket.off('alert_new');
+        };
+    }, []);
 
     const filtered = filter === 'all' ? alerts : alerts.filter(a => a.status === filter);
 
-    const handleAcknowledge = (id) => {
-        setAlerts(prev => prev.map(a => a.id === id ? { ...a, status: 'acknowledged' } : a));
+    const handleAcknowledge = async (id) => {
+        try {
+            await alertsAPI.acknowledge(id);
+            await fetchData();
+        } catch (err) { console.error(err); }
     };
 
-    const handleResolve = (id) => {
-        setAlerts(prev => prev.map(a => a.id === id ? { ...a, status: 'resolved' } : a));
+    const handleResolve = async (id) => {
+        try {
+            await alertsAPI.resolve(id);
+            await fetchData();
+        } catch (err) { console.error(err); }
     };
+
+    if (loading && alerts.length === 0) return <div className="spinner-container"><div className="spinner"></div></div>;
 
     return (
         <div>
@@ -51,7 +79,7 @@ export default function Alerts() {
                         borderColor: filter === f ? 'var(--accent-blue)' : 'var(--border-color)',
                         color: filter === f ? 'var(--accent-blue)' : 'var(--text-secondary)',
                     }}>
-                        {f} {f !== 'all' && <span style={{ marginLeft: 4, opacity: 0.6 }}>({alerts.filter(a => f === 'all' || a.status === f).length})</span>}
+                        {f} {f !== 'all' && <span style={{ marginLeft: 4, opacity: 0.6 }}>({alerts.filter(a => a.status === f).length})</span>}
                     </button>
                 ))}
             </div>
@@ -61,7 +89,7 @@ export default function Alerts() {
                 <AnimatePresence>
                     {filtered.map((alert, i) => (
                         <motion.div
-                            key={alert.id}
+                            key={alert._id}
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
                             exit={{ opacity: 0, x: -50 }}
@@ -69,7 +97,7 @@ export default function Alerts() {
                             className="glass-card"
                             style={{
                                 padding: '20px 24px',
-                                borderLeft: `3px solid ${typeColors[alert.type]}`,
+                                borderLeft: `3px solid ${typeColors[alert.type] || '#6366f1'}`,
                                 opacity: alert.status === 'resolved' ? 0.6 : 1,
                             }}
                         >
@@ -80,21 +108,21 @@ export default function Alerts() {
                                             {alert.severity}
                                         </span>
                                         <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>
-                                            {channelIcons[alert.channel]} {alert.channel}
+                                            {channelIcons[alert.channel] || '📡'} {alert.channel}
                                         </span>
-                                        <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{alert.time}</span>
+                                        <span style={{ fontSize: 11, color: 'var(--text-secondary)' }}>{new Date(alert.createdAt).toLocaleString()}</span>
                                     </div>
                                     <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 4 }}>{alert.title}</h3>
                                     <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 6 }}>{alert.message}</p>
-                                    <p style={{ fontSize: 11, color: typeColors[alert.type] }}>Source: {alert.source}</p>
+                                    <p style={{ fontSize: 11, color: typeColors[alert.type] || '#6366f1' }}>Source: {alert.source}</p>
                                 </div>
                                 {alert.status === 'active' && (
                                     <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
-                                        <button onClick={() => handleAcknowledge(alert.id)} style={{
+                                        <button onClick={() => handleAcknowledge(alert._id)} style={{
                                             padding: '6px 14px', borderRadius: 6, border: '1px solid var(--border-color)',
                                             background: 'transparent', color: 'var(--accent-yellow)', cursor: 'pointer', fontSize: 11, fontWeight: 600,
                                         }}>ACK</button>
-                                        <button onClick={() => handleResolve(alert.id)} style={{
+                                        <button onClick={() => handleResolve(alert._id)} style={{
                                             padding: '6px 14px', borderRadius: 6, border: 'none',
                                             background: 'rgba(16,185,129,0.15)', color: 'var(--accent-green)', cursor: 'pointer', fontSize: 11, fontWeight: 600,
                                         }}>RESOLVE</button>
@@ -110,6 +138,7 @@ export default function Alerts() {
                             </div>
                         </motion.div>
                     ))}
+                    {filtered.length === 0 && <div className="glass-card" style={{ padding: 20, textAlign: 'center', color: 'var(--text-secondary)' }}>No notifications found in this category.</div>}
                 </AnimatePresence>
             </div>
         </div>

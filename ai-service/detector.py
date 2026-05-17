@@ -8,7 +8,6 @@ for CPU spikes, failed logins, and suspicious traffic
 
 import numpy as np
 from datetime import datetime, timedelta
-import random
 import logging
 
 logger = logging.getLogger(__name__)
@@ -124,7 +123,10 @@ class AnomalyDetector:
             Dictionary with CPU anomaly results
         """
         if not metrics:
-            metrics = self._generate_cpu_data()
+            return {
+                'totalDataPoints': 0, 'mean': 0, 'stdDev': 0, 'maxValue': 0, 'minValue': 0,
+                'anomaliesDetected': 0, 'anomalies': [], 'threshold': self.cpu_threshold, 'status': 'normal'
+            }
 
         values = [m.get('value', m) if isinstance(m, dict) else m for m in metrics]
         z_scores = self._calculate_z_scores(values)
@@ -169,7 +171,10 @@ class AnomalyDetector:
             Dictionary with login anomaly results
         """
         if not attempts:
-            attempts = self._generate_login_data()
+            return {
+                'totalAttempts': 0, 'failedAttempts': 0, 'uniqueIPs': 0,
+                'suspiciousIPs': [], 'bruteForceDetected': False, 'riskLevel': 'low'
+            }
 
         # Group by IP address
         ip_attempts = {}
@@ -216,7 +221,10 @@ class AnomalyDetector:
             Dictionary with traffic anomaly results
         """
         if not traffic_data:
-            traffic_data = self._generate_traffic_data()
+            return {
+                'totalDataPoints': 0, 'avgRequests': 0, 'maxRequests': 0,
+                'anomaliesDetected': 0, 'anomalies': [], 'ddosRisk': False, 'status': 'normal'
+            }
 
         request_counts = [t.get('requests', t) if isinstance(t, dict) else t for t in traffic_data]
         z_scores = self._calculate_z_scores(request_counts)
@@ -246,73 +254,3 @@ class AnomalyDetector:
             'status': 'critical' if len(anomalies) > 5 else ('warning' if anomalies else 'normal')
         }
 
-    def _generate_cpu_data(self):
-        """Generate simulated CPU data with some anomalies"""
-        data = []
-        now = datetime.utcnow()
-        for i in range(48):
-            # Normal CPU range 20-60%, with occasional spikes
-            value = random.gauss(40, 10)
-            if random.random() < 0.08:  # 8% chance of anomaly
-                value = random.uniform(85, 99)
-            data.append({
-                'value': max(0, min(100, value)),
-                'timestamp': (now - timedelta(hours=48-i)).isoformat()
-            })
-        return data
-
-    def _generate_login_data(self):
-        """Generate simulated login attempt data"""
-        attempts = []
-        now = datetime.utcnow()
-        normal_ips = [f'10.0.{random.randint(1,255)}.{random.randint(1,255)}' for _ in range(20)]
-        suspicious_ip = '192.168.1.100'
-        
-        for i in range(200):
-            if random.random() < 0.2:  # 20% from suspicious IP
-                attempts.append({
-                    'ip': suspicious_ip,
-                    'success': random.random() < 0.05,  # 95% failure rate
-                    'username': f'admin{random.randint(1,5)}',
-                    'timestamp': (now - timedelta(minutes=random.randint(1, 1440))).isoformat()
-                })
-            else:
-                attempts.append({
-                    'ip': random.choice(normal_ips),
-                    'success': random.random() < 0.9,
-                    'username': f'user{random.randint(1,50)}',
-                    'timestamp': (now - timedelta(minutes=random.randint(1, 1440))).isoformat()
-                })
-        return attempts
-
-    def _generate_traffic_data(self):
-        """Generate simulated traffic data with anomalies"""
-        data = []
-        now = datetime.utcnow()
-        for i in range(72):
-            # Normal traffic pattern
-            requests = int(random.gauss(500, 100))
-            if random.random() < 0.06:  # 6% chance of traffic spike
-                requests = int(random.uniform(1500, 3000))
-            data.append({
-                'requests': max(0, requests),
-                'timestamp': (now - timedelta(hours=72-i)).isoformat()
-            })
-        return data
-
-    def generate_simulated_data(self):
-        """
-        Generate complete simulated anomaly data for dashboard demo.
-        Returns all three types of anomaly analysis.
-        """
-        cpu_data = self._generate_cpu_data()
-        login_data = self._generate_login_data()
-        traffic_data = self._generate_traffic_data()
-
-        return {
-            'cpu': self.detect_cpu_anomalies(cpu_data),
-            'login': self.detect_login_anomalies(login_data),
-            'traffic': self.detect_traffic_anomalies(traffic_data),
-            'overallRisk': 'high',
-            'generatedAt': datetime.utcnow().isoformat()
-        }
