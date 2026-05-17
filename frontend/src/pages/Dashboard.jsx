@@ -52,6 +52,8 @@ export default function Dashboard() {
     });
     const [loading, setLoading] = useState(true);
 
+    const [recentAlerts, setRecentAlerts] = useState([]);
+
     useEffect(() => {
         const timer = setInterval(() => setCurrentTime(new Date()), 1000);
 
@@ -60,7 +62,7 @@ export default function Dashboard() {
             setLiveStats(data);
             setMetrics(prev => {
                 const newData = [...prev, {
-                    time: new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    time: new Date(data.timestamp || new Date()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
                     cpu: data.cpu.usage,
                     memory: data.memory.percentage
                 }];
@@ -73,13 +75,17 @@ export default function Dashboard() {
             }));
         });
 
+        socket.on('alert_new', (alert) => {
+            setRecentAlerts(prev => [alert, ...prev].slice(0, 5));
+        });
+
         const fetchData = async () => {
             try {
                 const [mRes, sRes, dRes, aRes] = await Promise.all([
                     metricsAPI.getHistory(),
                     securityAPI.getStats(),
                     deploymentsAPI.getStats(),
-                    alertsAPI.getAll()
+                    alertsAPI.getAll({ limit: 5 })
                 ]);
 
                 if (mRes.data.success) {
@@ -90,8 +96,12 @@ export default function Dashboard() {
                     })));
                 }
 
+                if (aRes.data.success) {
+                    setRecentAlerts(aRes.data.data.slice(0, 5));
+                }
+
                 setStats({
-                    vulnerabilities: sRes.data.data || stats.vulnerabilities,
+                    vulnerabilities: sRes.data.data.stats || stats.vulnerabilities,
                     deployments: dRes.data.data || stats.deployments,
                     alerts: {
                         total: aRes.data.data.length,
@@ -110,23 +120,10 @@ export default function Dashboard() {
         return () => {
             clearInterval(timer);
             socket.off('metrics_update');
+            socket.off('alert_new');
         };
     }, []);
 
-    const securityPieData = [
-        { name: 'Critical', value: stats.vulnerabilities.critical || 0, color: '#ef4444' },
-        { name: 'High', value: stats.vulnerabilities.high || 0, color: '#f97316' },
-        { name: 'Medium', value: stats.vulnerabilities.medium || 0, color: '#f59e0b' },
-        { name: 'Low', value: stats.vulnerabilities.low || 0, color: '#10b981' },
-    ].filter(item => item.value > 0);
-
-    // Fallback if no real vulnerabilities yet
-    const displayPieData = securityPieData.length > 0 ? securityPieData : [
-        { name: 'Critical', value: 3, color: '#ef4444' },
-        { name: 'High', value: 8, color: '#f97316' },
-        { name: 'Medium', value: 15, color: '#f59e0b' },
-        { name: 'Low', value: 24, color: '#10b981' },
-    ];
 
     if (loading && metrics.length === 0) {
         return <div className="flex items-center justify-center h-full"><div className="spinner"></div></div>;
@@ -165,12 +162,12 @@ export default function Dashboard() {
                 gap: 20,
                 marginBottom: 28,
             }}>
-                <StatCard title="Servers Online" value="1/1" subtitle="Local Host Monitoring" icon={HiOutlineServer} color="green" trend={0} delay={0} />
+                <StatCard title="Servers Online" value={`${stats.containers.running > 0 ? 1 : 0}/1`} subtitle="Local Host Monitoring" icon={HiOutlineServer} color="green" trend={0} delay={0} />
                 <StatCard title="Total Deployments" value={stats.deployments.total} subtitle={`${stats.deployments.success} success`} icon={HiOutlineCode} color="blue" delay={0.1} />
                 <StatCard title="Vulnerabilities" value={stats.vulnerabilities.total} subtitle={`${stats.vulnerabilities.critical} critical`} icon={HiOutlineShieldCheck} color="red" delay={0.2} />
                 <StatCard title="Active Alerts" value={stats.alerts.unresolved} subtitle="Total unresolved" icon={HiOutlineBell} color="yellow" delay={0.3} />
                 <StatCard title="Containers" value={`${stats.containers.running}/${stats.containers.total}`} subtitle="Docker Status" icon={HiOutlineChip} color="purple" delay={0.4} />
-                <StatCard title="Uptime" value="99.98%" subtitle="System Pulse" icon={HiOutlineTrendingUp} color="cyan" delay={0.5} />
+                <StatCard title="Uptime" value={liveStats ? `${Math.floor(liveStats.uptime / 3600)}h ${Math.floor((liveStats.uptime % 3600) / 60)}m` : '...'} subtitle="System Uptime" icon={HiOutlineTrendingUp} color="cyan" delay={0.5} />
             </div>
 
             {/* Charts Row */}
@@ -211,39 +208,41 @@ export default function Dashboard() {
                     </ResponsiveContainer>
                 </motion.div>
 
-                {/* Security Overview Pie */}
+                {/* Recent AI Anomaly Logs */}
                 <motion.div
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.4 }}
                     className="chart-container"
+                    style={{ display: 'flex', flexDirection: 'column' }}
                 >
-                    <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>Security Risk Analysis</h3>
-                    <ResponsiveContainer width="100%" height={220}>
-                        <PieChart>
-                            <Pie
-                                data={displayPieData}
-                                cx="50%"
-                                cy="50%"
-                                innerRadius={60}
-                                outerRadius={85}
-                                paddingAngle={5}
-                                dataKey="value"
-                            >
-                                {displayPieData.map((entry, i) => (
-                                    <Cell key={i} fill={entry.color} />
-                                ))}
-                            </Pie>
-                            <Tooltip />
-                        </PieChart>
-                    </ResponsiveContainer>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 15 }}>
-                        {displayPieData.map((item) => (
-                            <div key={item.name} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 11 }}>
-                                <div style={{ width: 8, height: 8, borderRadius: '2px', background: item.color }} />
-                                <span style={{ color: 'var(--text-secondary)' }}>{item.name}: <strong>{item.value}</strong></span>
+                    <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>Live AI Threats</h3>
+                    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                        {recentAlerts.map((alert, i) => (
+                            <div key={alert._id || i} style={{
+                                padding: '10px 12px',
+                                background: 'rgba(0,0,0,0.2)',
+                                borderRadius: 8,
+                                borderLeft: `3px solid ${alert.severity === 'critical' ? '#ef4444' : '#3b82f6'}`,
+                                fontSize: 12
+                            }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                                    <span style={{ fontWeight: 700, color: alert.severity === 'critical' ? '#ef4444' : '#3b82f6', fontSize: 10 }}>
+                                        {alert.type?.toUpperCase() || 'ANOMALY'}
+                                    </span>
+                                    <span style={{ color: 'var(--text-secondary)', fontSize: 9 }}>
+                                        {new Date(alert.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                </div>
+                                <p style={{ fontWeight: 600, marginBottom: 2 }}>{alert.title}</p>
+                                <p style={{ color: 'var(--text-secondary)', fontSize: 11 }}>{alert.message}</p>
                             </div>
                         ))}
+                        {recentAlerts.length === 0 && (
+                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', fontSize: 13, textAlign: 'center', padding: 20 }}>
+                                <p>🛡️ Scanning system activity...<br />No active threats detected.</p>
+                            </div>
+                        )}
                     </div>
                 </motion.div>
             </div>
@@ -277,10 +276,11 @@ export default function Dashboard() {
                     <h3 style={{ fontSize: 16, fontWeight: 700, marginBottom: 20 }}>System Activity Log</h3>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                         {[
-                            { action: 'Real-time metrics enabled', time: 'Active', icon: '⚡', color: 'cyan' },
-                            { action: 'Database connection stable', time: 'Active', icon: '🔋', color: 'green' },
-                            { action: 'Monitoring agent started', time: 'Now', icon: '🛰️', color: 'blue' },
-                            { action: 'AI Detector heartbeat received', time: '1m ago', icon: '💓', color: 'purple' },
+                            { action: `CPU Load: ${liveStats?.cpu?.usage || 0}%`, time: liveStats ? 'Live' : 'Connecting...', icon: '⚡', ok: (liveStats?.cpu?.usage || 0) < 85 },
+                            { action: `Memory: ${liveStats?.memory?.percentage || 0}%`, time: liveStats ? 'Live' : 'Connecting...', icon: '🔋', ok: (liveStats?.memory?.percentage || 0) < 90 },
+                            { action: `Containers: ${stats.containers.running}/${stats.containers.total} running`, time: liveStats ? 'Live' : 'Connecting...', icon: '🛰️', ok: stats.containers.running > 0 },
+                            { action: `Disk: ${liveStats?.disk?.percentage || 0}%`, time: liveStats ? 'Live' : 'Connecting...', icon: '💾', ok: (liveStats?.disk?.percentage || 0) < 90 },
+                            { action: `Network: ↓${liveStats?.network?.rx || 0} ↑${liveStats?.network?.tx || 0} KB/s`, time: liveStats ? 'Live' : 'Connecting...', icon: '📡', ok: true },
                         ].map((item, i) => (
                             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px', borderRadius: 10, background: 'rgba(17, 24, 39, 0.3)', border: '1px solid rgba(42, 48, 80, 0.2)' }}>
                                 <span style={{ fontSize: 18 }}>{item.icon}</span>
@@ -288,7 +288,7 @@ export default function Dashboard() {
                                     <p style={{ fontSize: 13, fontWeight: 500 }}>{item.action}</p>
                                     <p style={{ fontSize: 11, color: 'var(--text-secondary)' }}>Status: {item.time}</p>
                                 </div>
-                                <div className={`status-dot success`} />
+                                <div className={`status-dot ${item.ok ? 'success' : 'critical'}`} />
                             </div>
                         ))}
                     </div>

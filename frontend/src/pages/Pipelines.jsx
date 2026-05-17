@@ -41,21 +41,30 @@ export default function Pipelines() {
 
             if (statsRes.data.success) {
                 const s = statsRes.data.data;
+                const runs = res.data.data;
+                // Compute real avg build time from actual durations
+                const durations = runs.filter(p => p.duration > 0).map(p => p.duration);
+                const avgSec = durations.length > 0 ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : 0;
+                const avgMin = Math.floor(avgSec / 60);
+                const avgRemSec = avgSec % 60;
+
                 setStats({
                     totalBuilds: s.totalPipelines || 0,
                     successRate: s.successRate || 0,
-                    avgTime: '2m 14s',
-                    incidents: res.data.data.filter(p => p.status === 'failed').length
+                    avgTime: avgSec > 0 ? `${avgMin}m ${avgRemSec}s` : 'N/A',
+                    incidents: runs.filter(p => p.status === 'failed').length
                 });
 
-                // Construct chart data
-                setDailyData([
-                    { day: 'Mon', success: 8, failed: 1 },
-                    { day: 'Tue', success: 12, failed: 2 },
-                    { day: 'Wed', success: 6, failed: 0 },
-                    { day: 'Thu', success: 15, failed: 3 },
-                    { day: 'Fri', success: Math.round(s.totalPipelines * (s.successRate / 100)), failed: Math.round(s.totalPipelines * (1 - s.successRate / 100)) },
-                ]);
+                // Build chart from REAL pipeline data grouped by day
+                const dayMap = {};
+                runs.forEach(p => {
+                    const d = new Date(p.createdAt);
+                    const dayLabel = d.toLocaleDateString('en-US', { weekday: 'short' });
+                    if (!dayMap[dayLabel]) dayMap[dayLabel] = { success: 0, failed: 0 };
+                    if (p.status === 'success') dayMap[dayLabel].success++;
+                    else dayMap[dayLabel].failed++;
+                });
+                setDailyData(Object.entries(dayMap).map(([day, counts]) => ({ day, ...counts })));
             }
         } catch (err) {
             console.error("Pipelines fetch error:", err);

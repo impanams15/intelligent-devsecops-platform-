@@ -45,42 +45,69 @@ class MonitorService {
                 this.io.emit('metrics_update', stats);
             }
 
-            // 2. Send to AI Service for Anomaly Detection
+            // 2. Send to AI Service for Anomaly Detection (with history for better analysis)
             try {
                 const aiUrl = process.env.AI_SERVICE_URL || 'http://ai-service:8000';
 
+                // Get recent history for statistical context
+                const history = await ServerMetric.find().sort({ createdAt: -1 }).limit(20);
+                const cpuMetrics = [...history.reverse().map(m => m.cpu?.usage || 0), stats.cpu.usage];
+                const networkMetrics = [...history.map(m => (m.network?.rx || 0) + (m.network?.tx || 0)), stats.network.rx + stats.network.tx];
+
                 // CPU Analysis
-                const aiRes = await axios.post(`${aiUrl}/api/detect/cpu`, { metrics: [stats.cpu.usage] });
-                if (aiRes.data?.is_anomaly || (aiRes.data?.data?.anomalies && aiRes.data.data.anomalies.length > 0)) {
+                const aiRes = await axios.post(`${aiUrl}/api/detect/cpu`, { metrics: cpuMetrics });
+                const isAnomaly = aiRes.data?.data?.anomalies?.some(a => a.index === cpuMetrics.length - 1);
+
+                if (isAnomaly) {
                     const Alert = require('../models/Alert');
-                    const newAlert = await Alert.create({
+                    const existing = await Alert.findOne({
                         title: 'AI Anomaly Detected',
-                        message: `Unusual CPU pattern detected: ${stats.cpu.usage}% load`,
-                        type: 'ai_detection',
-                        severity: stats.cpu.usage > 90 ? 'critical' : 'high',
-                        source: 'ai-service',
-                        metadata: { usage: stats.cpu.usage }
+                        status: 'active',
+                        createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) }
                     });
-                    this.io.emit('alert_new', newAlert);
+
+                    if (!existing) {
+                        const newAlert = await Alert.create({
+                            title: 'AI Anomaly Detected',
+                            message: `Unusual CPU pattern detected: ${stats.cpu.usage}% load (Z-Score analysis)`,
+                            type: 'ai_detection',
+                            severity: stats.cpu.usage > 90 ? 'critical' : 'high',
+                            source: 'ai-service',
+                            status: 'active',
+                            metadata: { usage: stats.cpu.usage }
+                        });
+                        this.io.emit('alert_new', newAlert);
+                    }
                 }
 
                 // Traffic Analysis
-                const trafficRequests = stats.network.rx + stats.network.tx;
-                const trafficRes = await axios.post(`${aiUrl}/api/detect/traffic`, { trafficData: [trafficRequests] });
-                if (trafficRes.data?.data?.anomalies && trafficRes.data.data.anomalies.length > 0) {
+                const trafficRes = await axios.post(`${aiUrl}/api/detect/traffic`, { trafficData: networkMetrics });
+                const isTrafficAnomaly = trafficRes.data?.data?.anomalies?.some(a => a.index === networkMetrics.length - 1);
+
+                if (isTrafficAnomaly) {
                     const Alert = require('../models/Alert');
-                    const newAlert = await Alert.create({
+                    const existing = await Alert.findOne({
                         title: 'Network Traffic Anomaly',
-                        message: `Unusual network traffic spike: ${trafficRequests} KB/s`,
-                        type: 'ai_detection',
-                        severity: 'high',
-                        source: 'ai-service'
+                        status: 'active',
+                        createdAt: { $gte: new Date(Date.now() - 5 * 60 * 1000) }
                     });
-                    this.io.emit('alert_new', newAlert);
+
+                    if (!existing) {
+                        const trafficRequests = stats.network.rx + stats.network.tx;
+                        const newAlert = await Alert.create({
+                            title: 'Network Traffic Anomaly',
+                            message: `Unusual network traffic spike: ${trafficRequests} KB/s`,
+                            type: 'ai_detection',
+                            severity: 'high',
+                            source: 'ai-service',
+                            status: 'active'
+                        });
+                        this.io.emit('alert_new', newAlert);
+                    }
                 }
 
             } catch (err) {
-                // Silently skip if AI service is down
+                console.error('AI Service Error:', err.message);
             }
 
             // 2a. Real Container Crash Detection

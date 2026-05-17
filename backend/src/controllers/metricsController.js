@@ -36,7 +36,7 @@ exports.getServerMetrics = async (req, res) => {
 exports.getMetricsHistory = async (req, res) => {
     try {
         const metrics = await ServerMetric.find()
-            .sort({ timestamp: -1 })
+            .sort({ createdAt: -1 })
             .limit(100);
 
         const history = metrics.reverse().map(m => ({

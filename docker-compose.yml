@@ -24,11 +24,12 @@ services:
       - NODE_ENV=production
       - PORT=5000
       - MONGODB_URI=mongodb://mongo:27017/devsecops
-      - JWT_SECRET=super_secret_jwt_key_2024
+      - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES_IN=7d
       - AI_SERVICE_URL=http://ai-service:8000
       - FRONTEND_URL=http://localhost:3000
-      - GITHUB_TOKEN=${GITHUB_TOKEN} # For real CI/CD data
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - GITHUB_REPOSITORY=${GITHUB_REPOSITORY}
     user: root # Needed to access /var/run/docker.sock
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Access to Docker API
